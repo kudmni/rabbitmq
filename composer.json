@@ -1,6 +1,6 @@
 {
-    "name": "kudmni/rabbitmq-producer",
-    "description": "Обёртка над Rabbit MQ для создания задач различного типа",
+    "name": "kudmni/rabbitmq",
+    "description": "Обёртка над Rabbit MQ для создания/обработки задач различного типа",
     "type": "library",
     "license": "MIT",
     "authors": [
