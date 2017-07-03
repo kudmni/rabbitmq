@@ -64,10 +64,10 @@ class Producer {
 	}
 
 	/**
-	 * Создание канала для отправки ack-сообщений в параллельном режиме
+	 * Создание канала для отправки сообщений
 	 * @return object channel
 	 */
-	public function createAckChannel() {
+	public function createChannel() {
 		$channel = $this->connection->channel();
 		$channel->basic_qos(null, 1, null);
 		return $channel;
@@ -182,16 +182,6 @@ class Producer {
 		}
 		$channel->close();
 		return json_decode($response, true);
-	}
-
-	/**
-	 * Создание канала для отправки rpc-сообщений в параллельном режиме
-	 * @return object channel
-	 */
-	public function createRpcChannel() {
-		$channel = $this->connection->channel();
-		$channel->basic_qos(null, 1, null);
-		return $channel;
 	}
 
 	/**
