@@ -1,0 +1,26 @@
+{
+    "name": "kudmni/rabbitmq-producer",
+    "description": "Обёртка над Rabbit MQ для создания задач различного типа",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "PR-CY.RU",
+            "email": "we@pr-cy.ru"
+        }
+    ],
+    "require": {
+        "php": ">=5.5",
+		"php-amqplib/php-amqplib": "2.6.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "4.7.*",
+        "satooshi/php-coveralls": "1.0.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "PrCy\\RabbitMQ\\": "src/"
+        }
+    }
+}
+
