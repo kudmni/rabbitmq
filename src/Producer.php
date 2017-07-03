@@ -50,7 +50,7 @@ class Producer {
 	public function addAckMessage($routingKey, $messageBody, $priority = self::PRIORITY_NORMAL) {
 		$channel = $this->connection->channel();
 		$channel->basic_qos(null, 1, null);
-		$correlationId = $this->getDI()->get('uniqid');
+		$correlationId = uniqid();
 		$msg = new AMQPMessage(
 			json_encode($messageBody),
 			[
