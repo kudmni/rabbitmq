@@ -13,12 +13,65 @@ class Producer {
 	const PRIORITY_NORMAL	 = 1;
 	const PRIORITY_HIGH		 = 2;
 
-	const MESSAGE_TTL		 = 300;	// 5 минут - максимальное время жизни сообщения в очереди
+	const MESSAGE_TTL		 = 300;	// TTL сообщения в очереди, сек
 
 	protected $connection;
+	protected $prefix;
 
-	public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest') {
-		$this->connection = new AMQPConnection($host, $port, $user, $password);
+	/**
+	 * Конструктор класса
+	 * @param string $host
+	 * @param integer $port
+	 * @param string $user
+	 * @param string $password
+	 * @param string $prefix	Используется для формирования ID сообщений
+	 */
+	public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest', $prefix = '') {
+		$this->connection = $this->createConnection($host, $port, $user, $password);
+		$this->prefix = $prefix;
+	}
+
+	/**
+	 * Создаёт экземпляр соединения с RabbitMQ
+	 * @param string $host
+	 * @param integer $port
+	 * @param string $user
+	 * @param string $password
+	 * @return AMQPConnection
+	 * @codeCoverageIgnore
+	 */
+	protected function createConnection($host, $port, $user, $password) {
+		return new AMQPConnection($host, $port, $user, $password);
+	}
+
+	/**
+	 * Создаёт экземпляр сообщения
+	 * @param mixed $body
+	 * @param array $options
+	 * @return AMQPMessage
+	 * @codeCoverageIgnore
+	 */
+	protected function createMessage($body, $options) {
+		return new AMQPMessage(json_encode($body), $options);
+	}
+
+	/**
+	 * Создаёт экземпляр таблицы параметров сообщения
+	 * @param array $data
+	 * @return AMQPTable
+	 * @codeCoverageIgnore
+	 */
+	protected function createTable($data) {
+		return new AMQPTable($data);
+	}
+
+	/**
+	 * Создаёт уникальный идентификатор сообщения
+	 * @return string
+	 * @codeCoverageIgnore
+	 */
+	protected function createUniqid() {
+		return uniqid($this->prefix, true);
 	}
 
 	/**
@@ -31,8 +84,8 @@ class Producer {
 	public function addMessage($routingKey, $messageBody) {
 		$channel = $this->connection->channel();
 		$channel->basic_qos(null, 1, null);
-		$msg = new AMQPMessage(
-			json_encode($messageBody),
+		$msg = $this->createMessage(
+			$messageBody,
 			['delivery_mode' => 2]
 		);
 		$channel->basic_publish($msg, 'bg', $routingKey);
@@ -50,9 +103,9 @@ class Producer {
 	public function addAckMessage($routingKey, $messageBody, $priority = self::PRIORITY_NORMAL) {
 		$channel = $this->connection->channel();
 		$channel->basic_qos(null, 1, null);
-		$correlationId = uniqid();
-		$msg = new AMQPMessage(
-			json_encode($messageBody),
+		$correlationId = $this->createUniqid();
+		$msg = $this->createMessage(
+			$messageBody,
 			[
 				'delivery_mode'	 => 2,
 				'correlation_id' => $correlationId,
@@ -78,16 +131,15 @@ class Producer {
 	 * @param object $channel
 	 * @param string $routingKey
 	 * @param string $messageBody
-	 * @param callback $outerCallback
 	 * @param int $priority
 	 * @return void
 	 */
 	public function appendAckMessage($channel, $routingKey, $messageBody, $priority = self::PRIORITY_NORMAL) {
-		$msg = new AMQPMessage(
-			json_encode($messageBody),
+		$msg = $this->createMessage(
+			$messageBody,
 			[
 				'delivery_mode'	 => 2,
-				'correlation_id' => uniqid(),
+				'correlation_id' => $this->createUniqid(),
 				'priority'		 => $priority
 			]
 		);
@@ -113,7 +165,7 @@ class Producer {
 		// Очередь dlx
 		$endtime	= $time + $delay * 1000;
 		$queueFull	= "$exchangeName.$queueName.$endtime";
-		$arguments	 = new AMQPTable([
+		$arguments	 = $this->createTable([
 			"x-dead-letter-exchange"	=> $exchangeName,
 			"x-message-ttl"				=> $delay * 1000,
 			"x-expires"					=> $delay * 1000 + 10000
@@ -123,7 +175,7 @@ class Producer {
 		$routingKey = "$queueName.$endtime";
 		$channel->queue_bind($queueFull, $exchangeDlx, $routingKey);
 		// Публикуем сообщение
-		$msg = new AMQPMessage($messageBody, ['delivery_mode' => 2]);
+		$msg = $this->createMessage($messageBody, ['delivery_mode' => 2]);
 		$channel->basic_qos(null, 1, null);
 		$channel->basic_publish($msg, $exchangeDlx, $routingKey);
 		$channel->close();
@@ -135,15 +187,16 @@ class Producer {
 	 * @param string $routingKey
 	 * @param string $messageBody
 	 * @param int $priority
+	 * @param int $timeLimit
 	 * @return string
 	 */
 	public function addRpcMessage($routingKey, $messageBody, $priority = self::PRIORITY_NORMAL, $timeLimit = self::MESSAGE_TTL) {
 		$channel = $this->connection->channel();
 		$channel->basic_qos(null, 1, null);
-		$arguments				 = new AMQPTable(["x-max-priority" => self::PRIORITY_HIGH]);
+		$arguments				 = $this->createTable(["x-max-priority" => self::PRIORITY_HIGH]);
 		list($callbackQueueName) = $channel->queue_declare("", false, true, true, true, false, $arguments);
 		$response				 = null;
-		$correlationId			 = uniqid();
+		$correlationId			 = $this->createUniqid();
 		$callback				 = function ($msg) use ($channel, &$response, $correlationId) {
 			if ($msg->get('correlation_id') == $correlationId) {
 				$response = $msg->body;
@@ -160,8 +213,8 @@ class Producer {
 			false,
 			$callback
 		);
-		$msg = new AMQPMessage(
-			json_encode($messageBody),
+		$msg = $this->createMessage(
+			$messageBody,
 			[
 				'correlation_id' => $correlationId,
 				'reply_to'		 => $callbackQueueName,
@@ -194,7 +247,7 @@ class Producer {
 	 * @return void
 	 */
 	public function appendRpcMessage($channel, $routingKey, $messageBody, $outerCallback, $priority = self::PRIORITY_NORMAL) {
-		$correlationId = uniqid();
+		$correlationId = $this->createUniqid();
 		$callback = function ($msg) use ($channel, $correlationId, $outerCallback) {
 			if ($msg->get('correlation_id') == $correlationId) {
 				// Выполняем внешний callback
@@ -203,8 +256,16 @@ class Producer {
 				$channel->basic_cancel($msg->delivery_info['consumer_tag']);
 			}
 		};
-		$arguments = new AMQPTable(["x-max-priority" => self::PRIORITY_HIGH]);
-		list($callbackQueueName) = $channel->queue_declare("", false, true, true, true, false, $arguments);
+		$arguments = $this->createTable(["x-max-priority" => self::PRIORITY_HIGH]);
+		list($callbackQueueName) = $channel->queue_declare(
+			'',
+			false,
+			true,
+			true,
+			true,
+			false,
+			$arguments
+		);
 		$channel->basic_consume(
 			$callbackQueueName,
 			'',
@@ -214,8 +275,8 @@ class Producer {
 			false,
 			$callback
 		);
-		$msg = new AMQPMessage(
-			json_encode($messageBody),
+		$msg = $this->createMessage(
+			$messageBody,
 			[
 				'correlation_id' => $correlationId,
 				'reply_to'		 => $callbackQueueName,
@@ -245,12 +306,13 @@ class Producer {
 				break;
 			}
 		}
+		$tasksLeft = count($channel->callbacks);
 		$channel->close();
-		if (count($channel->callbacks) > 0) {
+		if ($tasksLeft > 0) {
 			throw new TimeoutException(
 				__FUNCTION__ . " превышено максимальное время ($timeLimit сек.)"
 				. " параллельного выполнения RPC-задач."
-				. " Не выполнено: " . count($channel->callbacks) . " шт."
+				. " Не выполнено: " . $tasksLeft . " шт."
 			);
 		}
 	}
