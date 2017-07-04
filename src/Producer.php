@@ -163,8 +163,8 @@ class Producer {
 		$exchangeDlx = $exchangeName . ".dlx";
 		$channel->exchange_declare($exchangeDlx, 'topic', false, false, false);
 		// Очередь dlx
-		$endtime	= $time + $delay * 1000;
-		$queueFull	= "$exchangeName.$queueName.$endtime";
+		$endtime	 = $time + $delay * 1000;
+		$queueFull	 = "$exchangeName.$queueName.$endtime";
 		$arguments	 = $this->createTable([
 			"x-dead-letter-exchange"	=> $exchangeName,
 			"x-message-ttl"				=> $delay * 1000,
