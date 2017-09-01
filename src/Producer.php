@@ -14,7 +14,7 @@ class Producer
     const PRIORITY_NORMAL    = 1;
     const PRIORITY_HIGH      = 2;
 
-    const MESSAGE_TTL        = 300; // TTL сообщения в очереди, сек
+    const MESSAGE_TTL        = 86400; // TTL сообщения по умолчанию = 1 сутки
 
     protected $connection;
     protected $prefix;
@@ -84,16 +84,17 @@ class Producer
      * Отправка сообщения без подтверждения (отправили и забыли)
      * @link http://www.rabbitmq.com/tutorials/tutorial-one-php.html Simple message
      * @param string $routingKey
-     * @param string $messageBody
+     * @param string $body
+     * @param int $ttl
      * @return void
      */
-    public function addMessage($routingKey, $messageBody)
+    public function addMessage($routingKey, $body, $ttl = self::MESSAGE_TTL)
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, 1, null);
         $msg = $this->createMessage(
-            $messageBody,
-            ['delivery_mode' => 2]
+            $body,
+            ['delivery_mode' => 2, 'expiration' => 1000 * (int) $ttl]
         );
         $channel->basic_publish($msg, 'bg', $routingKey);
         $channel->close();
@@ -103,21 +104,23 @@ class Producer
      * Отправка сообщения с подтверждением
      * @link http://www.rabbitmq.com/tutorials/tutorial-two-php.html Message acknowledgment
      * @param string $routingKey
-     * @param string $messageBody
+     * @param string $body
      * @param int $priority
+     * @param int $ttl
      * @return void
      */
-    public function addAckMessage($routingKey, $messageBody, $priority = self::PRIORITY_NORMAL)
+    public function addAckMessage($routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, 1, null);
         $correlationId = $this->createUniqid();
         $msg = $this->createMessage(
-            $messageBody,
+            $body,
             [
                 'delivery_mode'  => 2,
                 'correlation_id' => $correlationId,
-                'priority'       => $priority
+                'priority'       => $priority,
+                'expiration'     => 1000 * (int) $ttl
             ]
         );
         $channel->basic_publish($msg, 'ack', $routingKey);
@@ -139,18 +142,20 @@ class Producer
      * Добавление ack-сообщения в канал
      * @param object $channel
      * @param string $routingKey
-     * @param string $messageBody
+     * @param string $body
      * @param int $priority
+     * @param int $ttl
      * @return void
      */
-    public function appendAckMessage($channel, $routingKey, $messageBody, $priority = self::PRIORITY_NORMAL)
+    public function appendAckMessage($channel, $routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
         $msg = $this->createMessage(
-            $messageBody,
+            $body,
             [
                 'delivery_mode'  => 2,
                 'correlation_id' => $this->createUniqid(),
-                'priority'       => $priority
+                'priority'       => $priority,
+                'expiration'     => 1000 * (int) $ttl
             ]
         );
         $channel->basic_publish($msg, 'ack', $routingKey);
@@ -159,34 +164,34 @@ class Producer
     /**
      * Отправка сообщения с подтверждением в отложенную очередь
      * @link https://www.rabbitmq.com/dlx.html Dead Letter Exchanges
-     * @param string $queueName
-     * @param string $exchangeName
-     * @param string $messageBody
+     * @param string $queue
+     * @param string $exchange
+     * @param string $body
      * @param int    $delay
      * @param int    $time
      */
-    public function addDelayedMessage($queueName, $exchangeName, $messageBody, $delay, $time)
+    public function addDelayedMessage($queue, $exchange, $body, $delay, $time)
     {
         $channel = $this->connection->channel();
         // Обменник
-        $channel->exchange_declare($exchangeName, 'topic', false, false, false);
+        $channel->exchange_declare($exchange, 'topic', false, false, false);
         // Обменник dlx
-        $exchangeDlx = $exchangeName . ".dlx";
+        $exchangeDlx = $exchange . ".dlx";
         $channel->exchange_declare($exchangeDlx, 'topic', false, false, false);
         // Очередь dlx
         $endtime     = $time + $delay * 1000;
-        $queueFull   = "$exchangeName.$queueName.$endtime";
+        $queueFull   = "$exchange.$queue.$endtime";
         $arguments   = $this->createTable([
-            "x-dead-letter-exchange"    => $exchangeName,
-            "x-message-ttl"             => $delay * 1000,
-            "x-expires"                 => $delay * 1000 + 10000
+            "x-dead-letter-exchange" => $exchange,
+            "x-message-ttl"          => $delay * 1000,
+            "x-expires"              => $delay * 1000 + 10000
         ]);
         $channel->queue_declare($queueFull, false, true, false, true, false, $arguments);
         // Переплет очереди и обменника
-        $routingKey = "$queueName.$endtime";
+        $routingKey = "$queue.$endtime";
         $channel->queue_bind($queueFull, $exchangeDlx, $routingKey);
         // Публикуем сообщение
-        $msg = $this->createMessage($messageBody, ['delivery_mode' => 2]);
+        $msg = $this->createMessage($body, ['delivery_mode' => 2]);
         $channel->basic_qos(null, 1, null);
         $channel->basic_publish($msg, $exchangeDlx, $routingKey);
         $channel->close();
@@ -196,12 +201,12 @@ class Producer
      * Отправка сообщения с получением результата
      * @link http://www.rabbitmq.com/tutorials/tutorial-six-php.html Remote procedure call (RPC)
      * @param string $routingKey
-     * @param string $messageBody
+     * @param string $body
      * @param int $priority
-     * @param int $timeLimit
+     * @param int $ttl
      * @return string
      */
-    public function addRpcMessage($routingKey, $messageBody, $priority = self::PRIORITY_NORMAL, $timeLimit = self::MESSAGE_TTL)
+    public function addRpcMessage($routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, 1, null);
@@ -226,22 +231,23 @@ class Producer
             $callback
         );
         $msg = $this->createMessage(
-            $messageBody,
+            $body,
             [
                 'correlation_id' => $correlationId,
                 'reply_to'       => $callbackQueueName,
-                'priority'       => $priority
+                'priority'       => $priority,
+                'expiration'     => 1000 * (int) $ttl
             ]
         );
         $channel->basic_publish($msg, 'rpc', $routingKey);
         while ($response === null) {
             try {
-                $channel->wait(null, false, $timeLimit);
+                $channel->wait(null, false, $ttl);
             } catch (AMQPTimeoutException $e) {
                 $channel->close();
                 throw new TimeoutException(
                     __FUNCTION__ . " превышено максимальное время"
-                    . " ($timeLimit сек.) выполнения RPC-задачи."
+                    . " ($ttl сек.) выполнения RPC-задачи."
                 );
             }
         }
@@ -253,12 +259,13 @@ class Producer
      * Добавление rpc-сообщения в канал
      * @param object $channel
      * @param string $routingKey
-     * @param string $messageBody
+     * @param string $body
      * @param callback $outerCallback
      * @param int $priority
+     * @param int $ttl
      * @return void
      */
-    public function appendRpcMessage($channel, $routingKey, $messageBody, $outerCallback, $priority = self::PRIORITY_NORMAL)
+    public function appendRpcMessage($channel, $routingKey, $body, $outerCallback, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
         $correlationId = $this->createUniqid();
         $callback = function ($msg) use ($channel, $correlationId, $outerCallback) {
@@ -289,11 +296,12 @@ class Producer
             $callback
         );
         $msg = $this->createMessage(
-            $messageBody,
+            $body,
             [
                 'correlation_id' => $correlationId,
                 'reply_to'       => $callbackQueueName,
-                'priority'       => $priority
+                'priority'       => $priority,
+                'expiration'     => 1000 * (int) $ttl
             ]
         );
         $channel->basic_publish($msg, 'rpc', $routingKey);
@@ -302,15 +310,15 @@ class Producer
     /**
      * Ожидание выполнения всех добавленных rpc-сообщений в канале
      * @param object $channel
-     * @param int $timeLimit
+     * @param int $ttl
      * @return void
      */
-    public function waitRpcCallbacks($channel, $timeLimit = self::MESSAGE_TTL)
+    public function waitRpcCallbacks($channel, $ttl = self::MESSAGE_TTL)
     {
         $startTime = time();
         // Ждём выполнения всех задач
         while (count($channel->callbacks)) {
-            $timeLeft = $startTime + $timeLimit - time();
+            $timeLeft = $startTime + $ttl - time();
             if ($timeLeft <= 0) {
                 break;
             }
@@ -324,7 +332,7 @@ class Producer
         $channel->close();
         if ($tasksLeft > 0) {
             throw new TimeoutException(
-                __FUNCTION__ . " превышено максимальное время ($timeLimit сек.)"
+                __FUNCTION__ . " превышено максимальное время ($ttl сек.)"
                 . " параллельного выполнения RPC-задач."
                 . " Не выполнено: " . $tasksLeft . " шт."
             );

@@ -65,7 +65,7 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
             ->method('createMessage')
             ->with(
                 $this->equalTo($messageBodyMock),
-                $this->equalTo(['delivery_mode' => 2])
+                $this->equalTo(['delivery_mode' => 2, 'expiration'=> 1000 * Producer::MESSAGE_TTL])
             )
             ->willReturn($messageMock);
 
@@ -119,7 +119,8 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
                 $this->equalTo([
                     'delivery_mode'  => 2,
                     'correlation_id' => $correlationIdMock,
-                    'priority'       => $priority
+                    'priority'       => $priority,
+                    'expiration'     => 1000 * Producer::MESSAGE_TTL
                 ])
             )
             ->willReturn($messageMock);
@@ -188,7 +189,8 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
                 $this->equalTo([
                     'delivery_mode'  => 2,
                     'correlation_id' => $correlationIdMock,
-                    'priority'       => $priority
+                    'priority'       => $priority,
+                    'expiration'     => 1000 * Producer::MESSAGE_TTL,
                 ])
             )
             ->willReturn($messageMock);
@@ -305,7 +307,7 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $routingKeyMock          = 'routing.key.mock';
         $messageBodyMock         = 'messageBodyMock';
         $priority                = Producer::PRIORITY_NORMAL;
-        $timeLimit               = 100500;
+        $ttl                     = 100500;
         $messageMock             = $this->getMock('\PhpAmqpLib\Message\AMQPMessage');
         $argumentsMock           = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
         $callbackQueueNameMock   = 'callbackQueueNameMock';
@@ -416,13 +418,14 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
                 $this->equalTo([
                     'correlation_id' => $correlationIdMock,
                     'reply_to'       => $callbackQueueNameMock,
-                    'priority'       => $priority
+                    'priority'       => $priority,
+                    'expiration'     => 1000 * $ttl
                 ])
             )
             ->willReturn($messageMock);
 
         $this->producer->__construct();
-        $result = $this->producer->addRpcMessage($routingKeyMock, $messageBodyMock, $priority, $timeLimit);
+        $result = $this->producer->addRpcMessage($routingKeyMock, $messageBodyMock, $priority, $ttl);
         if (!$throwException) {
             $this->assertEquals($resultMock, $result);
         }
@@ -515,7 +518,8 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
                 $this->equalTo([
                     'correlation_id' => $correlationIdMock,
                     'reply_to'       => $callbackQueueNameMock,
-                    'priority'       => $priority
+                    'priority'       => $priority,
+                    'expiration'     => 1000 * Producer::MESSAGE_TTL,
                 ])
             )
             ->willReturn($messageMock);
