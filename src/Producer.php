@@ -17,7 +17,8 @@ class Producer
     const MESSAGE_TTL        = 86400; // TTL сообщения по умолчанию = 1 сутки
 
     protected $connection;
-    protected $prefix;
+    protected $messagePrefix;
+    protected $exchangePrefix;
 
     /**
      * Конструктор класса
@@ -25,12 +26,14 @@ class Producer
      * @param integer $port
      * @param string $user
      * @param string $password
-     * @param string $prefix    Используется для формирования ID сообщений
+     * @param string $messagePrefix    Используется для формирования ID сообщений
+     * @param string $exchangePrefix   Используется для формирования уникального названия обменника (для разных проектов)
      */
-    public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest', $prefix = '')
+    public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest', $messagePrefix = '', $exchangePrefix = '')
     {
-        $this->connection = $this->createConnection($host, $port, $user, $password);
-        $this->prefix = $prefix;
+        $this->connection     = $this->createConnection($host, $port, $user, $password);
+        $this->messagePrefix  = $messagePrefix;
+        $this->exchangePrefix = $exchangePrefix;
     }
 
     /**
@@ -77,7 +80,7 @@ class Producer
      */
     protected function createUniqid()
     {
-        return uniqid($this->prefix, true);
+        return uniqid($this->messagePrefix, true);
     }
 
     /**
@@ -96,7 +99,7 @@ class Producer
             $body,
             ['delivery_mode' => 2, 'expiration' => 1000 * (int) $ttl]
         );
-        $channel->basic_publish($msg, 'bg', $routingKey);
+        $channel->basic_publish($msg, $this->exchangePrefix . 'bg', $routingKey);
         $channel->close();
     }
 
@@ -123,7 +126,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, 'ack', $routingKey);
+        $channel->basic_publish($msg, $this->exchangePrefix . 'ack', $routingKey);
         $channel->close();
     }
 
@@ -158,7 +161,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, 'ack', $routingKey);
+        $channel->basic_publish($msg, $this->exchangePrefix . 'ack', $routingKey);
     }
 
     /**
@@ -172,6 +175,7 @@ class Producer
      */
     public function addDelayedMessage($queue, $exchange, $body, $delay, $time)
     {
+        $exchange = $this->exchangePrefix . $exchange;
         $channel = $this->connection->channel();
         // Обменник
         $channel->exchange_declare($exchange, 'topic', false, false, false);
@@ -239,7 +243,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, 'rpc', $routingKey);
+        $channel->basic_publish($msg, $this->exchangePrefix . 'rpc', $routingKey);
         while ($response === null) {
             try {
                 $channel->wait(null, false, $ttl);
@@ -304,7 +308,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, 'rpc', $routingKey);
+        $channel->basic_publish($msg, $this->exchangePrefix . 'rpc', $routingKey);
     }
 
     /**
