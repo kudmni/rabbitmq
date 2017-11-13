@@ -13,6 +13,7 @@ class Producer
     const PRIORITY_LOW       = 0;
     const PRIORITY_NORMAL    = 1;
     const PRIORITY_HIGH      = 2;
+    const PRIORITY_MAX       = 3;
 
     const MESSAGE_TTL        = 86400; // TTL сообщения по умолчанию = 1 сутки
 
