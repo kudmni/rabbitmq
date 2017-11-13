@@ -355,4 +355,65 @@ class Producer
             );
         }
     }
+    
+    /**
+     * Блокирующее выполнение задачи в произвольной очереди
+     * @param string $queueName
+     * @param array $messageBody
+     * @param integer $priority
+     * @param int $timeLimit
+     * @return mix
+     * @throws \Exception
+     */
+    public function doTask($queueName, $messageBody, $priority = self::PRIORITY_NORMAL, $timeLimit = self::MESSAGE_TTL)
+    {
+        $channel = $this->connection->channel();
+        $channel->basic_qos(null, 1, null);
+        $arguments   = $this->createTable([
+            "x-message-ttl"  => self::MESSAGE_TTL * 1000,
+            "x-max-priority" => self::PRIORITY_MAX
+        ]);
+        list($callbackQueueName) = $channel->queue_declare("", false, true, true, true, false, $arguments);
+        $response                = null;
+        $correlationId           = $this->createUniqid();
+        $callback                = function ($msg) use ($channel, &$response, $correlationId) {
+            if ($msg->get('correlation_id') == $correlationId) {
+                $response = $msg->body;
+                // Перестаём слушать канал, так как ответ получен
+                $channel->basic_cancel($msg->delivery_info['consumer_tag']);
+            }
+        };
+        $channel->basic_consume(
+            $callbackQueueName,
+            '',
+            false,
+            false,
+            false,
+            false,
+            $callback
+        );
+
+        $msg = $this->createMessage(
+            $messageBody,
+            [
+                'correlation_id' => $correlationId,
+                'reply_to'       => $callbackQueueName,
+                'priority'       => $priority
+            ]
+        );
+
+        $queueName = $this->exchangePrefix . $queueName;
+        $channel->queue_declare($queueName, false, false, false, false);
+        $channel->basic_publish($msg, '', $queueName);
+        while ($response === null) {
+            try {
+                $channel->wait(null, false, $timeLimit);
+            } catch (\PhpAmqpLib\Exception\AMQPTimeoutException $e) {
+                $channel->close();
+                throw new \Exception(__FUNCTION__ . " превышено максимальное время ($timeLimit сек.) выполнения задачи.");
+            }
+        }
+        $channel->close();
+        return json_decode($response, true);
+    }
 }
