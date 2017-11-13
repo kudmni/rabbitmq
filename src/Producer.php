@@ -142,6 +142,18 @@ class Producer
     }
 
     /**
+     * Создание канала для отправки ack-сообщений в параллельном режиме
+     * @return object channel
+     */
+    public function createAckChannel($prefetchCount = 1)
+    {
+        $channel = $this->connection->channel();
+        $channel->basic_qos(null, $prefetchCount, null);
+        $channel->exchange_declare('ack', 'topic', false, false, false);
+        return $channel;
+    }
+    
+    /**
      * Добавление ack-сообщения в канал
      * @param object $channel
      * @param string $routingKey
