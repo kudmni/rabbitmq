@@ -135,7 +135,7 @@ class Producer
      * Создание канала для отправки сообщений
      * @return object channel
      */
-    public function createChannel()
+    public function  createChannel()
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, 1, null);
@@ -150,7 +150,19 @@ class Producer
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, $prefetchCount, null);
-        $channel->exchange_declare('ack', 'topic', false, false, false);
+        $channel->exchange_declare($this->exchangePrefix . 'ack', 'topic', false, false, false);
+        return $channel;
+    }
+
+    /**
+     * Создание канала для отправки rpc-сообщений в параллельном режиме
+     * @return object channel
+     */
+    public function createRpcChannel($prefetchCount = 1)
+    {
+        $channel = $this->connection->channel();
+        $channel->basic_qos(null, $prefetchCount, null);
+        $channel->exchange_declare($this->exchangePrefix . 'rpc', 'topic', false, false, false);
         return $channel;
     }
     
@@ -282,7 +294,7 @@ class Producer
      * @param int $ttl
      * @return void
      */
-    public function appendRpcMessage($channel, $routingKey, $body, $outerCallback, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
+    public function appendRpcMessage($channel, $routingKey, $body, $outerCallback, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL, $exchange = '')
     {
         $correlationId = $this->createUniqid();
         $callback = function ($msg) use ($channel, $correlationId, $outerCallback) {
@@ -321,7 +333,10 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, $this->exchangePrefix . 'rpc', $routingKey);
+        if (!$exchange) {
+            $exchange = $this->exchangePrefix . 'rpc';
+        }
+        $channel->basic_publish($msg, $exchange, $routingKey);
     }
 
     /**
