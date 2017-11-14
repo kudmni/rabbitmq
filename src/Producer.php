@@ -135,7 +135,7 @@ class Producer
      * Создание канала для отправки сообщений
      * @return object channel
      */
-    public function  createChannel()
+    public function createChannel()
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, 1, null);
