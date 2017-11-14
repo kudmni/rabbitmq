@@ -162,6 +162,84 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $this->assertEquals($channelMock, $channel);
     }
 
+    public function testCreateAckChannel()
+    {
+        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
+            ->disableOriginalConstructor()
+            ->setMethods(['basic_qos', 'exchange_declare'])
+            ->getMock();
+        $channelMock->expects($this->once())
+            ->method('basic_qos')
+            ->with(
+                $this->equalTo(null),
+                $this->equalTo(1),
+                $this->equalTo(null)
+            );
+        $channelMock->expects($this->once())
+            ->method('exchange_declare')
+            ->with(
+                $this->equalTo('ack'),
+                $this->equalTo('topic'),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false)
+            );
+
+        $connectionMock = $this->getMockBuilder('\PhpAmqpLib\Connection\AMQPConnection')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $connectionMock->expects($this->once())
+            ->method('channel')
+            ->willReturn($channelMock);
+
+        $this->producer->expects($this->once())
+            ->method('createConnection')
+            ->willReturn($connectionMock);
+
+        $this->producer->__construct();
+        $channel = $this->producer->createAckChannel();
+        $this->assertEquals($channelMock, $channel);
+    }
+
+    public function testCreateRpcChannel()
+    {
+        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
+            ->disableOriginalConstructor()
+            ->setMethods(['basic_qos', 'exchange_declare'])
+            ->getMock();
+        $channelMock->expects($this->once())
+            ->method('basic_qos')
+            ->with(
+                $this->equalTo(null),
+                $this->equalTo(1),
+                $this->equalTo(null)
+            );
+        $channelMock->expects($this->once())
+            ->method('exchange_declare')
+            ->with(
+                $this->equalTo('rpc'),
+                $this->equalTo('topic'),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false)
+            );
+
+        $connectionMock = $this->getMockBuilder('\PhpAmqpLib\Connection\AMQPConnection')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $connectionMock->expects($this->once())
+            ->method('channel')
+            ->willReturn($channelMock);
+
+        $this->producer->expects($this->once())
+            ->method('createConnection')
+            ->willReturn($connectionMock);
+
+        $this->producer->__construct();
+        $channel = $this->producer->createRpcChannel();
+        $this->assertEquals($channelMock, $channel);
+    }
+
     public function testAppendAckMessage()
     {
         $routingKeyMock      = 'routing.key.mock';
@@ -599,5 +677,163 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $channelMock->callbacks = [1, 2, 3];
         $this->producer->__construct();
         $this->producer->waitRpcCallbacks($channelMock, 123);
+    }
+
+
+    protected function doTask($throwException = false)
+    {
+        $queueNameMock          = 'queueNameMock';
+        $messageBodyMock         = 'messageBodyMock';
+        $priority                = Producer::PRIORITY_NORMAL;
+        $ttl                     = 100500;
+        $messageMock             = $this->getMock('\PhpAmqpLib\Message\AMQPMessage');
+        $argumentsMock           = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
+        $callbackQueueNameMock   = 'callbackQueueNameMock';
+        $correlationIdMock       = uniqid();
+        $callbackMock            = null;
+        $resultMock              = 'resultMock';
+        $consumerTagMock         = 'consumerTagMock';
+
+        $resultMessageMock = $this->getMockBuilder('\PhpAmqpLib\Message\AMQPMessage')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $resultMessageMock->expects($this->once())
+            ->method('get')
+            ->with($this->equalTo('correlation_id'))
+            ->willReturn($correlationIdMock);
+        $resultMessageMock->body = json_encode($resultMock);
+        $resultMessageMock->delivery_info['consumer_tag'] = $consumerTagMock;
+
+        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
+            ->disableOriginalConstructor()
+            ->setMethods(['basic_qos', 'queue_declare', 'basic_cancel', 'basic_consume' , 'basic_publish', 'wait', 'close'])
+            ->getMock();
+        $channelMock->expects($this->once())
+            ->method('basic_qos')
+            ->with(
+                $this->equalTo(null),
+                $this->equalTo(1),
+                $this->equalTo(null)
+            );
+
+        $channelMock->expects($this->exactly(2))
+            ->method('queue_declare')
+            ->withConsecutive(
+                [
+                    $this->equalTo(''),
+                    $this->equalTo(false),
+                    $this->equalTo(true),
+                    $this->equalTo(true),
+                    $this->equalTo(true),
+                    $this->equalTo(false),
+                    $this->equalTo($argumentsMock)
+                ],
+                [
+                    $this->equalTo($queueNameMock),
+                    $this->equalTo(false),
+                    $this->equalTo(false),
+                    $this->equalTo(false),
+                    $this->equalTo(false)
+                ]
+            )
+            ->willReturnOnConsecutiveCalls(
+                [$callbackQueueNameMock]
+            );
+        if (!$throwException) {
+            $channelMock->expects($this->once())
+                ->method('basic_cancel')
+                ->with($this->equalTo($consumerTagMock));
+        }
+        $channelMock->expects($this->once())
+            ->method('basic_consume')
+            ->with(
+                $this->equalTo($callbackQueueNameMock),
+                $this->equalTo(''),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->callback(function ($rpcCallback) use (&$callbackMock) {
+                    $callbackMock = $rpcCallback;
+                    return true;
+                })
+            )
+            ;
+        $channelMock->expects($this->once())
+            ->method('basic_publish')
+            ->with(
+                $this->equalTo($messageMock),
+                $this->equalTo(''),
+                $this->equalTo($queueNameMock)
+            );
+        if ($throwException) {
+            $channelMock->expects($this->once())
+                ->method('wait')
+                ->with($this->callback(function () use (&$callbackMock, $resultMessageMock) {
+                    $callbackMock($resultMessageMock);
+                    return true;
+                }))
+                ->willThrowException(new AMQPTimeoutException('Exception message mock'));
+        } else {
+            $channelMock->expects($this->once())
+                ->method('wait')
+                ->with($this->callback(function () use (&$callbackMock, $resultMessageMock) {
+                    $callbackMock($resultMessageMock);
+                    return true;
+                }));
+        }
+        $channelMock->expects($this->once())
+            ->method('close');
+
+        $connectionMock = $this->getMockBuilder('\PhpAmqpLib\Connection\AMQPConnection')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $connectionMock->expects($this->once())
+            ->method('channel')
+            ->willReturn($channelMock);
+
+        $this->producer->expects($this->once())
+            ->method('createConnection')
+            ->willReturn($connectionMock);
+        $this->producer->expects($this->once())
+            ->method('createTable')
+            ->with($this->equalTo([
+                "x-message-ttl" => Producer::MESSAGE_TTL * 1000,
+                "x-max-priority" => Producer::PRIORITY_MAX
+            ]))
+            ->willReturn($argumentsMock);
+        $this->producer->expects($this->once())
+            ->method('createUniqid')
+            ->willReturn($correlationIdMock);
+        $this->producer->expects($this->once())
+            ->method('createMessage')
+            ->with(
+                $this->equalTo($messageBodyMock),
+                $this->equalTo([
+                    'correlation_id' => $correlationIdMock,
+                    'reply_to'       => $callbackQueueNameMock,
+                    'priority'       => $priority
+                ])
+            )
+            ->willReturn($messageMock);
+
+        $this->producer->__construct();
+        $result = $this->producer->doTask($queueNameMock, $messageBodyMock, $priority, $ttl);
+        if (!$throwException) {
+            $this->assertEquals($resultMock, $result);
+        }
+    }
+
+    public function testDoTask()
+    {
+        $this->doTask(false);
+    }
+
+    /**
+     * @expectedException \Exception
+     */
+    public function testDoTaskException()
+    {
+        $this->doTask(true);
     }
 }
