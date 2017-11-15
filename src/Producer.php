@@ -19,7 +19,7 @@ class Producer
 
     protected $connection;
     protected $messagePrefix;
-    protected $exchangePrefix;
+    protected $appPrefix;
 
     /**
      * Конструктор класса
@@ -28,13 +28,13 @@ class Producer
      * @param string $user
      * @param string $password
      * @param string $messagePrefix    Используется для формирования ID сообщений
-     * @param string $exchangePrefix   Используется для формирования уникального названия обменника (для разных проектов)
+     * @param string $appPrefix        Используется для формирования уникального названия обменника, очереди; полезно для бесконфликтного сосуществования нескольких проектов на одном RabbitMQ-сервере
      */
-    public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest', $messagePrefix = '', $exchangePrefix = '')
+    public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest', $messagePrefix = '', $appPrefix = '')
     {
         $this->connection     = $this->createConnection($host, $port, $user, $password);
         $this->messagePrefix  = $messagePrefix;
-        $this->exchangePrefix = $exchangePrefix;
+        $this->appPrefix = $appPrefix;
     }
 
     /**
@@ -100,7 +100,7 @@ class Producer
             $body,
             ['delivery_mode' => 2, 'expiration' => 1000 * (int) $ttl]
         );
-        $channel->basic_publish($msg, $this->exchangePrefix . 'bg', $routingKey);
+        $channel->basic_publish($msg, $this->appPrefix . 'bg', $routingKey);
         $channel->close();
     }
 
@@ -127,7 +127,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, $this->exchangePrefix . 'ack', $routingKey);
+        $channel->basic_publish($msg, $this->appPrefix . 'ack', $routingKey);
         $channel->close();
     }
 
@@ -150,7 +150,7 @@ class Producer
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, $prefetchCount, null);
-        $channel->exchange_declare($this->exchangePrefix . 'ack', 'topic', false, false, false);
+        $channel->exchange_declare($this->appPrefix . 'ack', 'topic', false, false, false);
         return $channel;
     }
 
@@ -162,7 +162,7 @@ class Producer
     {
         $channel = $this->connection->channel();
         $channel->basic_qos(null, $prefetchCount, null);
-        $channel->exchange_declare($this->exchangePrefix . 'rpc', 'topic', false, false, false);
+        $channel->exchange_declare($this->appPrefix . 'rpc', 'topic', false, false, false);
         return $channel;
     }
     
@@ -186,7 +186,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, $this->exchangePrefix . 'ack', $routingKey);
+        $channel->basic_publish($msg, $this->appPrefix . 'ack', $routingKey);
     }
 
     /**
@@ -200,7 +200,7 @@ class Producer
      */
     public function addDelayedMessage($queue, $exchange, $body, $delay, $time)
     {
-        $exchange = $this->exchangePrefix . $exchange;
+        $exchange = $this->appPrefix . $exchange;
         $channel = $this->connection->channel();
         // Обменник
         $channel->exchange_declare($exchange, 'topic', false, false, false);
@@ -268,7 +268,7 @@ class Producer
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, $this->exchangePrefix . 'rpc', $routingKey);
+        $channel->basic_publish($msg, $this->appPrefix . 'rpc', $routingKey);
         while ($response === null) {
             try {
                 $channel->wait(null, false, $ttl);
@@ -334,7 +334,7 @@ class Producer
             ]
         );
         if (!$exchange) {
-            $exchange = $this->exchangePrefix . 'rpc';
+            $exchange = $this->appPrefix . 'rpc';
         }
         $channel->basic_publish($msg, $exchange, $routingKey);
     }
@@ -417,7 +417,7 @@ class Producer
             ]
         );
 
-        $queueName = $this->exchangePrefix . $queueName;
+        $queueName = $this->appPrefix . $queueName;
         $channel->queue_declare($queueName, false, false, false, false);
         $channel->basic_publish($msg, '', $queueName);
         while ($response === null) {
