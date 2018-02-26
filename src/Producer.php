@@ -2,10 +2,11 @@
 
 namespace PrCy\RabbitMQ;
 
+use \PhpAmqpLib\Channel\AMQPChannel;
 use \PhpAmqpLib\Connection\AMQPConnection;
+use \PhpAmqpLib\Exception\AMQPTimeoutException;
 use \PhpAmqpLib\Message\AMQPMessage;
 use \PhpAmqpLib\Wire\AMQPTable;
-use \PhpAmqpLib\Exception\AMQPTimeoutException;
 use \PrCy\RabbitMQ\Exception\TimeoutException;
 
 class Producer
@@ -24,7 +25,7 @@ class Producer
     /**
      * Конструктор класса
      * @param string $host
-     * @param integer $port
+     * @param int    $port
      * @param string $user
      * @param string $password
      * @param string $messagePrefix    Используется для формирования ID сообщений
@@ -32,15 +33,15 @@ class Producer
      */
     public function __construct($host = '127.0.0.1', $port = 5672, $user = 'guest', $password = 'guest', $messagePrefix = '', $appPrefix = '')
     {
-        $this->connection     = $this->createConnection($host, $port, $user, $password);
-        $this->messagePrefix  = $messagePrefix;
-        $this->appPrefix = $appPrefix;
+        $this->connection    = $this->createConnection($host, $port, $user, $password);
+        $this->messagePrefix = $messagePrefix;
+        $this->appPrefix     = $appPrefix;
     }
 
     /**
      * Создаёт экземпляр соединения с RabbitMQ
      * @param string $host
-     * @param integer $port
+     * @param int    $port
      * @param string $user
      * @param string $password
      * @return AMQPConnection
@@ -52,26 +53,26 @@ class Producer
     }
 
     /**
+     * Создаёт экземпляр таблицы параметров сообщения
+     * @param array $data
+     * @return AMQPTable
+     * @codeCoverageIgnore
+     */
+    protected function createAMQPTable($data)
+    {
+        return new AMQPTable($data);
+    }
+
+    /**
      * Создаёт экземпляр сообщения
      * @param mixed $body
      * @param array $options
      * @return AMQPMessage
      * @codeCoverageIgnore
      */
-    protected function createMessage($body, $options)
+    protected function createAMQPMessage($body, $options)
     {
         return new AMQPMessage(json_encode($body), $options);
-    }
-
-    /**
-     * Создаёт экземпляр таблицы параметров сообщения
-     * @param array $data
-     * @return AMQPTable
-     * @codeCoverageIgnore
-     */
-    protected function createTable($data)
-    {
-        return new AMQPTable($data);
     }
 
     /**
@@ -85,265 +86,245 @@ class Producer
     }
 
     /**
-     * Отправка сообщения без подтверждения (отправили и забыли)
+     * Создаёт канал для отправки сообщений и обменник, если необходимо
+     * @param int    $prefetchCount
+     * @param string $exchange
+     * @return AMQPChannel
+     */
+    public function createChannel($prefetchCount = 1, $exchange = null)
+    {
+        $channel = $this->connection->channel();
+        $channel->basic_qos(0, $prefetchCount, false);
+        if ($exchange) {
+            $channel->exchange_declare($exchange, 'topic', false, false, false);
+        }
+        return $channel;
+    }
+
+    /**
+     * Создаёт канал и обменник для отправки bg-сообщений
+     * @param int $prefetchCount
+     * @return AMQPChannel
+     */
+    public function createBgChannel($prefetchCount = 1)
+    {
+        return $this->createChannel($prefetchCount, $this->appPrefix . 'bg');
+    }
+
+    /**
+     * Создаёт канал и обменник для отправки ack-сообщений
+     * @param int $prefetchCount
+     * @return AMQPChannel
+     */
+    public function createAckChannel($prefetchCount = 1)
+    {
+        return $this->createChannel($prefetchCount, $this->appPrefix . 'ack');
+    }
+
+    /**
+     * Создаёт канал и обменник для отправки rpc-сообщений
+     * @param int $prefetchCount
+     * @return AMQPChannel
+     */
+    public function createRpcChannel($prefetchCount = 1)
+    {
+        return $this->createChannel($prefetchCount, $this->appPrefix . 'rpc');
+    }
+
+    /**
+     * Создаёт очередь для отложенной обработки ответа
+     * @param string      $queueName
+     * @param AMQPChannel $channel
+     * @param bool        $autoDelete
+     * @param AMQPTable   $arguments
+     * @return mixed|null
+     */
+    public function createCallbackQueue($queueName = '', $channel = null, $autoDelete = false, $arguments = null)
+    {
+        if (empty($channel)) {
+            $channel = $this->createChannel();
+        }
+        if (empty($arguments)) {
+            $arguments = $this->createAMQPTable(["x-max-priority" => self::PRIORITY_HIGH]);
+        }
+        return $channel->queue_declare($queueName, false, true, false, $autoDelete, false, $arguments);
+    }
+
+    /**
+     * Отправка сообщения без подтверждения (bg)
      * @link http://www.rabbitmq.com/tutorials/tutorial-one-php.html Simple message
      * @param string $routingKey
      * @param string $body
-     * @param int $ttl
+     * @param int    $priority
+     * @param int    $ttl
      * @return void
      */
-    public function addMessage($routingKey, $body, $ttl = self::MESSAGE_TTL)
+    public function addMessage($routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, 1, null);
-        $msg = $this->createMessage(
+        $exchange = $this->appPrefix . 'bg';
+        $channel  = $this->createBgChannel();
+        $msg      = $this->createAMQPMessage(
             $body,
-            ['delivery_mode' => 2, 'expiration' => 1000 * (int) $ttl]
+            [
+                'delivery_mode' => 2,
+                'priority'      => $priority,
+                'expiration'    => 1000 * (int) $ttl
+            ]
         );
-        $channel->basic_publish($msg, $this->appPrefix . 'bg', $routingKey);
+        $channel->basic_publish($msg, $exchange, $routingKey);
         $channel->close();
     }
 
     /**
-     * Отправка сообщения с подтверждением
+     * Отправка сообщения с подтверждением (ack)
      * @link http://www.rabbitmq.com/tutorials/tutorial-two-php.html Message acknowledgment
      * @param string $routingKey
      * @param string $body
-     * @param int $priority
-     * @param int $ttl
+     * @param int    $priority
+     * @param int    $ttl
      * @return void
      */
     public function addAckMessage($routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, 1, null);
-        $correlationId = $this->createUniqid();
-        $msg = $this->createMessage(
-            $body,
-            [
-                'delivery_mode'  => 2,
-                'correlation_id' => $correlationId,
-                'priority'       => $priority,
-                'expiration'     => 1000 * (int) $ttl
-            ]
-        );
-        $channel->basic_publish($msg, $this->appPrefix . 'ack', $routingKey);
+        $channel = $this->createAckChannel();
+        $this->appendAckMessage($channel, $routingKey, $body, $priority, $ttl);
         $channel->close();
     }
 
     /**
-     * Создание канала для отправки сообщений
-     * @return object channel
-     */
-    public function createChannel()
-    {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, 1, null);
-        return $channel;
-    }
-
-    /**
-     * Создание канала для отправки ack-сообщений в параллельном режиме
-     * @return object channel
-     */
-    public function createAckChannel($prefetchCount = 1)
-    {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, $prefetchCount, null);
-        $channel->exchange_declare($this->appPrefix . 'ack', 'topic', false, false, false);
-        return $channel;
-    }
-
-    /**
-     * Создание канала для отправки rpc-сообщений в параллельном режиме
-     * @return object channel
-     */
-    public function createRpcChannel($prefetchCount = 1)
-    {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, $prefetchCount, null);
-        $channel->exchange_declare($this->appPrefix . 'rpc', 'topic', false, false, false);
-        return $channel;
-    }
-    
-    /**
-     * Добавление ack-сообщения в канал
-     * @param object $channel
-     * @param string $routingKey
-     * @param string $body
-     * @param int $priority
-     * @param int $ttl
+     * Добавление ack-сообщения в существующий канал
+     * @param AMQPChannel $channel
+     * @param string      $routingKey
+     * @param string      $body
+     * @param int         $priority
+     * @param int         $ttl
      * @return void
      */
     public function appendAckMessage($channel, $routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
-        $msg = $this->createMessage(
+        $exchange = $this->appPrefix . 'ack';
+        $this->publishAckMessage($channel, $exchange, $routingKey, $body, $priority, $ttl);
+    }
+
+    /**
+     * Создает и отправляет ack-сообщение
+     * @param AMQPChannel $channel
+     * @param string      $exchange
+     * @param string      $routingKey
+     * @param string      $body
+     * @param int         $priority
+     * @param int         $ttl
+     * @return void
+     */
+    public function publishAckMessage($channel, $exchange, $routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
+    {
+        $msg = $this->createAMQPMessage(
             $body,
             [
                 'delivery_mode'  => 2,
-                'correlation_id' => $this->createUniqid(),
                 'priority'       => $priority,
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        $channel->basic_publish($msg, $this->appPrefix . 'ack', $routingKey);
+        $channel->basic_publish($msg, $exchange, $routingKey);
     }
 
     /**
-     * Отправка сообщения с подтверждением в отложенную очередь
-     * @link https://www.rabbitmq.com/dlx.html Dead Letter Exchanges
-     * @param string $queue
-     * @param string $exchange
-     * @param string $body
-     * @param int    $delay
-     * @param int    $time
-     */
-    public function addDelayedMessage($queue, $exchange, $body, $delay, $time)
-    {
-        $exchange = $this->appPrefix . $exchange;
-        $channel = $this->connection->channel();
-        // Обменник
-        $channel->exchange_declare($exchange, 'topic', false, false, false);
-        // Обменник dlx
-        $exchangeDlx = $exchange . ".dlx";
-        $channel->exchange_declare($exchangeDlx, 'topic', false, false, false);
-        // Очередь dlx
-        $endtime     = $time + $delay * 1000;
-        $queueFull   = "$exchange.$queue.$endtime";
-        $arguments   = $this->createTable([
-            "x-dead-letter-exchange" => $exchange,
-            "x-message-ttl"          => $delay * 1000,
-            "x-expires"              => $delay * 1000 + 10000
-        ]);
-        $channel->queue_declare($queueFull, false, true, false, true, false, $arguments);
-        // Переплет очереди и обменника
-        $routingKey = "$queue.$endtime";
-        $channel->queue_bind($queueFull, $exchangeDlx, $routingKey);
-        // Публикуем сообщение
-        $msg = $this->createMessage($body, ['delivery_mode' => 2]);
-        $channel->basic_qos(null, 1, null);
-        $channel->basic_publish($msg, $exchangeDlx, $routingKey);
-        $channel->close();
-    }
-
-    /**
-     * Отправка сообщения с получением результата
+     * Отправка сообщения с получением результата (rpc)
      * @link http://www.rabbitmq.com/tutorials/tutorial-six-php.html Remote procedure call (RPC)
      * @param string $routingKey
      * @param string $body
-     * @param int $priority
-     * @param int $ttl
-     * @return string
+     * @param int    $priority
+     * @param int    $ttl
+     * @return mixed Результат
+     * @throws TimeoutException
      */
     public function addRpcMessage($routingKey, $body, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, 1, null);
-        $arguments               = $this->createTable(["x-max-priority" => self::PRIORITY_HIGH]);
-        list($callbackQueueName) = $channel->queue_declare("", false, true, true, true, false, $arguments);
-        $response                = null;
-        $correlationId           = $this->createUniqid();
-        $callback                = function ($msg) use ($channel, &$response, $correlationId) {
-            if ($msg->get('correlation_id') == $correlationId) {
-                $response = $msg->body;
-                // Перестаём слушать канал, так как ответ получен
-                $channel->basic_cancel($msg->delivery_info['consumer_tag']);
-            }
+        $channel  = $this->createRpcChannel();
+        $response = null;
+        $callback = function ($result) use (&$response) {
+            $response = $result;
         };
-        $channel->basic_consume(
-            $callbackQueueName,
-            '',
-            false,
-            false,
-            false,
-            false,
-            $callback
-        );
-        $msg = $this->createMessage(
-            $body,
-            [
-                'correlation_id' => $correlationId,
-                'reply_to'       => $callbackQueueName,
-                'priority'       => $priority,
-                'expiration'     => 1000 * (int) $ttl
-            ]
-        );
-        $channel->basic_publish($msg, $this->appPrefix . 'rpc', $routingKey);
-        while ($response === null) {
+        $this->appendRpcMessage($channel, $routingKey, $body, $callback, $priority, $ttl);
+        while (is_null($response)) {
             try {
                 $channel->wait(null, false, $ttl);
             } catch (AMQPTimeoutException $e) {
+                unset($e);
                 $channel->close();
                 throw new TimeoutException(
-                    __FUNCTION__ . " превышено максимальное время"
-                    . " ($ttl сек.) выполнения RPC-задачи."
+                    __FUNCTION__ . " превышено максимальное время ($ttl сек.)"
+                    . " выполнения RPC-задачи."
                 );
             }
         }
         $channel->close();
-        return json_decode($response, true);
+        return $response;
     }
 
     /**
      * Добавление rpc-сообщения в канал
-     * @param object $channel
-     * @param string $routingKey
-     * @param string $body
-     * @param callback $outerCallback
-     * @param int $priority
-     * @param int $ttl
+     * @param AMQPChannel $channel
+     * @param string      $routingKey
+     * @param string      $body
+     * @param callback    $outerCallback
+     * @param int         $priority
+     * @param int         $ttl
      * @return void
      */
-    public function appendRpcMessage($channel, $routingKey, $body, $outerCallback, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL, $exchange = '')
+    public function appendRpcMessage($channel, $routingKey, $body, $outerCallback, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
     {
+        $exchange = $this->appPrefix . 'rpc';
         $correlationId = $this->createUniqid();
-        $callback = function ($msg) use ($channel, $correlationId, $outerCallback) {
+        $callback = function ($msg) use ($correlationId, $outerCallback) {
             if ($msg->get('correlation_id') == $correlationId) {
                 // Выполняем внешний callback
                 $outerCallback(json_decode($msg->body, true));
+                // Подтверждаем обработку результата
+                $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag']);
                 // Перестаём слушать канал, так как ответ получен
-                $channel->basic_cancel($msg->delivery_info['consumer_tag']);
+                $msg->delivery_info['channel']->basic_cancel($msg->delivery_info['consumer_tag']);
             }
         };
-        $arguments = $this->createTable(["x-max-priority" => self::PRIORITY_HIGH]);
-        list($callbackQueueName) = $channel->queue_declare(
-            '',
-            false,
-            true,
-            true,
-            true,
-            false,
-            $arguments
-        );
-        $channel->basic_consume(
-            $callbackQueueName,
-            '',
-            false,
-            false,
-            false,
-            false,
-            $callback
-        );
-        $msg = $this->createMessage(
+        $arguments = $this->createAMQPTable(['x-max-priority' => self::PRIORITY_HIGH]);
+        list($callbackQueueName) = $channel->queue_declare('', false, true, true, true, false, $arguments);
+        $channel->basic_consume($callbackQueueName, '', false, false, false, false, $callback);
+        $this->publishRpcMessage($channel, $exchange, $routingKey, $body, $correlationId, $callbackQueueName, $priority, $ttl);
+    }
+
+    /**
+     * Создает и отправляет rpc-сообщение
+     * @param AMQPChannel $channel
+     * @param string      $exchange
+     * @param string      $routingKey
+     * @param string      $body
+     * @param string      $correlationId
+     * @param string      $replyTo
+     * @param int         $priority
+     * @param int         $ttl
+     * @return void
+     */
+    public function publishRpcMessage($channel, $exchange, $routingKey, $body, $correlationId, $replyTo, $priority = self::PRIORITY_NORMAL, $ttl = self::MESSAGE_TTL)
+    {
+        $msg = $this->createAMQPMessage(
             $body,
             [
                 'correlation_id' => $correlationId,
-                'reply_to'       => $callbackQueueName,
+                'reply_to'       => $replyTo,
                 'priority'       => $priority,
                 'expiration'     => 1000 * (int) $ttl
             ]
         );
-        if (!$exchange) {
-            $exchange = $this->appPrefix . 'rpc';
-        }
         $channel->basic_publish($msg, $exchange, $routingKey);
     }
 
     /**
      * Ожидание выполнения всех добавленных rpc-сообщений в канале
-     * @param object $channel
-     * @param int $ttl
+     * @param AMQPChannel $channel
+     * @param int         $ttl
      * @return void
+     * @throws TimeoutException
      */
     public function waitRpcCallbacks($channel, $ttl = self::MESSAGE_TTL)
     {
@@ -357,6 +338,7 @@ class Producer
             try {
                 $channel->wait(null, false, $timeLeft);
             } catch (AMQPTimeoutException $e) {
+                unset($e);
                 break;
             }
         }
@@ -370,65 +352,40 @@ class Producer
             );
         }
     }
-    
+
     /**
-     * Блокирующее выполнение задачи в произвольной очереди
-     * @param string $queueName
-     * @param array $messageBody
-     * @param integer $priority
-     * @param int $timeLimit
-     * @return mix
-     * @throws \Exception
+     * Отправка сообщения с подтверждением в отложенную очередь
+     * @link https://www.rabbitmq.com/dlx.html Dead Letter Exchanges
+     * @param string $queue
+     * @param string $exchange
+     * @param string $body
+     * @param int    $delay
+     * @param int    $time
+     * @return void
      */
-    public function doTask($queueName, $messageBody, $priority = self::PRIORITY_NORMAL, $timeLimit = self::MESSAGE_TTL)
+    public function addDelayedMessage($queue, $exchange, $body, $delay, $time)
     {
-        $channel = $this->connection->channel();
-        $channel->basic_qos(null, 1, null);
-        $arguments   = $this->createTable([
-            "x-message-ttl"  => self::MESSAGE_TTL * 1000,
-            "x-max-priority" => self::PRIORITY_MAX
+        $channel = $this->createChannel();
+        // Обменник
+        $channel->exchange_declare($exchange, 'topic', false, false, false);
+        // Обменник dlx
+        $exchangeDlx = $exchange . ".dlx";
+        $channel->exchange_declare($exchangeDlx, 'topic', false, false, false);
+        // Очередь dlx
+        $endtime     = $time + $delay * 1000;
+        $queueFull   = "$exchange.$queue.$endtime";
+        $arguments   = $this->createAMQPTable([
+            "x-dead-letter-exchange" => $exchange,
+            "x-message-ttl"          => $delay * 1000,
+            "x-expires"              => $delay * 1000 + 10000
         ]);
-        list($callbackQueueName) = $channel->queue_declare("", false, true, true, true, false, $arguments);
-        $response                = null;
-        $correlationId           = $this->createUniqid();
-        $callback                = function ($msg) use ($channel, &$response, $correlationId) {
-            if ($msg->get('correlation_id') == $correlationId) {
-                $response = $msg->body;
-                // Перестаём слушать канал, так как ответ получен
-                $channel->basic_cancel($msg->delivery_info['consumer_tag']);
-            }
-        };
-        $channel->basic_consume(
-            $callbackQueueName,
-            '',
-            false,
-            false,
-            false,
-            false,
-            $callback
-        );
-
-        $msg = $this->createMessage(
-            $messageBody,
-            [
-                'correlation_id' => $correlationId,
-                'reply_to'       => $callbackQueueName,
-                'priority'       => $priority
-            ]
-        );
-
-        $queueName = $this->appPrefix . $queueName;
-        $channel->queue_declare($queueName, false, false, false, false);
-        $channel->basic_publish($msg, '', $queueName);
-        while ($response === null) {
-            try {
-                $channel->wait(null, false, $timeLimit);
-            } catch (\PhpAmqpLib\Exception\AMQPTimeoutException $e) {
-                $channel->close();
-                throw new \Exception(__FUNCTION__ . " превышено максимальное время ($timeLimit сек.) выполнения задачи.");
-            }
-        }
+        $channel->queue_declare($queueFull, false, true, false, true, false, $arguments);
+        // Переплет очереди и обменника
+        $routingKey = "$queue.$endtime";
+        $channel->queue_bind($queueFull, $exchangeDlx, $routingKey);
+        // Публикуем сообщение
+        $msg = $this->createAMQPMessage($body, ['delivery_mode' => 2]);
+        $channel->basic_publish($msg, $exchangeDlx, $routingKey);
         $channel->close();
-        return json_decode($response, true);
     }
 }
