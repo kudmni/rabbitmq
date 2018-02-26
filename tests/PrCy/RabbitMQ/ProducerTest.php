@@ -26,21 +26,9 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
             ->setMethods(['basic_qos', 'exchange_declare'])
             ->getMock();
         $channelMock->expects($this->once())
-            ->method('basic_qos')
-            ->with(
-                $this->equalTo(0),
-                $this->equalTo(1),
-                $this->equalTo(false)
-            );
+            ->method('basic_qos');
         $channelMock->expects($this->once())
-            ->method('exchange_declare')
-            ->with(
-                $this->equalTo($exchangeName),
-                $this->equalTo('topic'),
-                $this->equalTo(false),
-                $this->equalTo(true),
-                $this->equalTo(false)
-            );
+            ->method('exchange_declare');
 
         $connectionMock = $this->getMockBuilder('\PhpAmqpLib\Connection\AMQPConnection')
             ->disableOriginalConstructor()
