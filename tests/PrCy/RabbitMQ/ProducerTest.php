@@ -435,24 +435,19 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
 
     public function testAddDelayedMessage()
     {
-        $queue         = 'queueMock';
         $exchange      = 'exchangeMock';
+        $routingKey    = 'routingKeyMock';
         $body          = 'bodyMock';
         $delay         = 123;
-        $time          = time();
         $argumentsMock = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
         $messageMock   = $this->getMock('\PhpAmqpLib\Message\AMQPMessage');
 
         $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
             ->disableOriginalConstructor()
-            ->setMethods(['exchange_declare', 'queue_declare', 'queue_bind', 'basic_publish', 'close'])
+            ->setMethods(['queue_declare', 'basic_publish', 'close'])
             ->getMock();
-        $channelMock->expects($this->exactly(2))
-            ->method('exchange_declare');
         $channelMock->expects($this->once())
             ->method('queue_declare');
-        $channelMock->expects($this->once())
-            ->method('queue_bind');
         $channelMock->expects($this->once())
             ->method('basic_publish');
         $channelMock->expects($this->once())
@@ -468,6 +463,6 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $producer->expects($this->once())
             ->method('createAMQPMessage')
             ->willReturn($messageMock);
-        $producer->addDelayedMessage($queue, $exchange, $body, $delay, $time);
+        $producer->addDelayedMessage($exchange, $routingKey, $body, $delay);
     }
 }

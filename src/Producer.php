@@ -356,36 +356,31 @@ class Producer
     /**
      * Отправка сообщения с подтверждением в отложенную очередь
      * @link https://www.rabbitmq.com/dlx.html Dead Letter Exchanges
-     * @param string $queue
      * @param string $exchange
+     * @param string $routingKey
      * @param string $body
      * @param int    $delay
+     * @param int    $priority
      * @param int    $time
      * @return void
      */
-    public function addDelayedMessage($queue, $exchange, $body, $delay, $time)
+    public function addDelayedMessage($exchange, $routingKey, $body, $delay, $priority = self::PRIORITY_NORMAL, $time = null)
     {
-        $channel = $this->createChannel();
-        // Обменник
-        $channel->exchange_declare($exchange, 'topic', false, false, false);
-        // Обменник dlx
-        $exchangeDlx = $exchange . ".dlx";
-        $channel->exchange_declare($exchangeDlx, 'topic', false, false, false);
-        // Очередь dlx
-        $endtime     = $time + $delay * 1000;
-        $queueFull   = "$exchange.$queue.$endtime";
-        $arguments   = $this->createAMQPTable([
-            "x-dead-letter-exchange" => $exchange,
-            "x-message-ttl"          => $delay * 1000,
-            "x-expires"              => $delay * 1000 + 10000
+        $channel   = $this->createChannel();
+        $endtime   = ($time ?: time()) + $delay;
+        $queue     = join('_', [$exchange, $routingKey, $endtime]);
+        $arguments = $this->createAMQPTable([
+            "x-dead-letter-exchange"    => $exchange,
+            "x-dead-letter-routing-key" => $routingKey,
+            "x-message-ttl"             => $delay * 1000,
+            "x-expires"                 => $delay * 1000 + 10000
         ]);
-        $channel->queue_declare($queueFull, false, true, false, true, false, $arguments);
-        // Переплет очереди и обменника
-        $routingKey = "$queue.$endtime";
-        $channel->queue_bind($queueFull, $exchangeDlx, $routingKey);
-        // Публикуем сообщение
-        $msg = $this->createAMQPMessage($body, ['delivery_mode' => 2]);
-        $channel->basic_publish($msg, $exchangeDlx, $routingKey);
+        $channel->queue_declare($queue, false, true, false, true, false, $arguments);
+        $msg = $this->createAMQPMessage(
+            $body,
+            ['delivery_mode' => 2, 'priority' => $priority]
+        );
+        $channel->basic_publish($msg, '', $queue);
         $channel->close();
     }
 }
