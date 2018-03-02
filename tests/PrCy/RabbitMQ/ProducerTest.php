@@ -438,7 +438,7 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $exchange      = 'exchangeMock';
         $routingKey    = 'routingKeyMock';
         $body          = 'bodyMock';
-        $delay         = 123;
+        $startTime     = strtotime('+30 minutes');
         $argumentsMock = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
         $messageMock   = $this->getMock('\PhpAmqpLib\Message\AMQPMessage');
 
@@ -463,6 +463,6 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $producer->expects($this->once())
             ->method('createAMQPMessage')
             ->willReturn($messageMock);
-        $producer->addDelayedMessage($exchange, $routingKey, $body, $delay);
+        $producer->addDelayedMessage($exchange, $routingKey, $body, $startTime);
     }
 }

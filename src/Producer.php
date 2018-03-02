@@ -359,26 +359,28 @@ class Producer
      * @param string $exchange
      * @param string $routingKey
      * @param string $body
-     * @param int    $delay
+     * @param int    $startTime
      * @param int    $priority
-     * @param int    $time
      * @return void
      */
-    public function addDelayedMessage($exchange, $routingKey, $body, $delay, $priority = self::PRIORITY_NORMAL, $time = null)
+    public function addDelayedMessage($exchange, $routingKey, $body, $startTime, $priority = self::PRIORITY_NORMAL)
     {
         $channel   = $this->createChannel();
-        $endtime   = ($time ?: time()) + $delay;
-        $queue     = join('_', [$exchange, $routingKey, $endtime]);
+        $delay     = $startTime - time();
+        $queue     = join('_', [$exchange, $routingKey, $startTime]);
         $arguments = $this->createAMQPTable([
             "x-dead-letter-exchange"    => $exchange,
             "x-dead-letter-routing-key" => $routingKey,
-            "x-message-ttl"             => $delay * 1000,
-            "x-expires"                 => $delay * 1000 + 10000
+            "x-expires"                 => ($delay + 60) * 1000
         ]);
         $channel->queue_declare($queue, false, true, false, true, false, $arguments);
         $msg = $this->createAMQPMessage(
             $body,
-            ['delivery_mode' => 2, 'priority' => $priority]
+            [
+                'delivery_mode' => 2,
+                'expiration'    => $delay * 1000,
+                'priority'      => $priority
+            ]
         );
         $channel->basic_publish($msg, '', $queue);
         $channel->close();
