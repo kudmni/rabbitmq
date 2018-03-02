@@ -447,7 +447,8 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
             ->setMethods(['queue_declare', 'basic_publish', 'close'])
             ->getMock();
         $channelMock->expects($this->once())
-            ->method('queue_declare');
+            ->method('queue_declare')
+            ->willReturn(['amq.gen-mock']);
         $channelMock->expects($this->once())
             ->method('basic_publish');
         $channelMock->expects($this->once())

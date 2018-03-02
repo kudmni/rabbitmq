@@ -367,21 +367,14 @@ class Producer
     {
         $channel   = $this->createChannel();
         $delay     = $startTime - time();
-        $queue     = join('_', [$exchange, $routingKey, $startTime]);
         $arguments = $this->createAMQPTable([
             "x-dead-letter-exchange"    => $exchange,
             "x-dead-letter-routing-key" => $routingKey,
+            "x-message-ttl"             => $delay * 1000,
             "x-expires"                 => ($delay + 60) * 1000
         ]);
-        $channel->queue_declare($queue, false, true, false, true, false, $arguments);
-        $msg = $this->createAMQPMessage(
-            $body,
-            [
-                'delivery_mode' => 2,
-                'expiration'    => $delay * 1000,
-                'priority'      => $priority
-            ]
-        );
+        list($queue) = $channel->queue_declare('', false, true, false, true, false, $arguments);
+        $msg = $this->createAMQPMessage($body, ['delivery_mode' => 2, 'priority' => $priority]);
         $channel->basic_publish($msg, '', $queue);
         $channel->close();
     }
