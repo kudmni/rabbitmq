@@ -372,7 +372,7 @@ class Producer
     public function createDelayedQueue($exchange, $routingKey, $delay) {
         $channel = $this->createChannel();
         $channel->exchange_declare($exchange, 'topic', false, false, false);
-        $queueName = $this->appPrefix . "delayed_queue_$routingKey:$delay";
+        $queueName = $this->appPrefix . "delayed_queue_$routingKey.$delay";
         $arguments = $this->createAMQPTable([
             'x-dead-letter-exchange'    => $exchange,
             'x-dead-letter-routing-key' => $routingKey,
