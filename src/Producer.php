@@ -132,25 +132,6 @@ class Producer
     }
 
     /**
-     * Создаёт очередь для отложенной обработки ответа
-     * @param string      $queueName
-     * @param AMQPChannel $channel
-     * @param bool        $autoDelete
-     * @param AMQPTable   $arguments
-     * @return mixed|null
-     */
-    public function createCallbackQueue($queueName = '', $channel = null, $autoDelete = false, $arguments = null)
-    {
-        if (empty($channel)) {
-            $channel = $this->createChannel();
-        }
-        if (empty($arguments)) {
-            $arguments = $this->createAMQPTable(["x-max-priority" => self::PRIORITY_HIGH]);
-        }
-        return $channel->queue_declare($queueName, false, true, false, $autoDelete, false, $arguments);
-    }
-
-    /**
      * Отправка сообщения без подтверждения (bg)
      * @link http://www.rabbitmq.com/tutorials/tutorial-one-php.html Simple message
      * @param string $routingKey
@@ -254,7 +235,7 @@ class Producer
                 unset($e);
                 $channel->close();
                 throw new TimeoutException(
-                    __FUNCTION__ . " превышено максимальное время ($ttl сек.)"
+                    "Превышено максимальное время ($ttl сек.)"
                     . " выполнения RPC-задачи."
                 );
             }
@@ -346,11 +327,61 @@ class Producer
         $channel->close();
         if ($tasksLeft > 0) {
             throw new TimeoutException(
-                __FUNCTION__ . " превышено максимальное время ($ttl сек.)"
+                "Превышено максимальное время ($ttl сек.)"
                 . " параллельного выполнения RPC-задач."
-                . " Не выполнено: " . $tasksLeft . " шт."
+                . " Не выполнено: $tasksLeft шт."
             );
         }
+    }
+
+    /**
+     * Создает очередь для отложенной обработки результатов RPC-задач
+     * @param AMQPChannel $channel
+     * @param string $routingKey
+     * @param callback $outerCallback
+     * @param bool $noAck
+     * @return string Название созданной очереди
+     */
+    public function createCallbackQueue($channel, $routingKey, $outerCallback, $noAck = false) {
+        $callback = function ($msg) use ($noAck, $outerCallback) {
+            $outerCallback(json_decode($msg->body, true), $msg->get('correlation_id'));
+            if (!$noAck) {
+                $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag']);
+            }
+        };
+        $exchangeName = $this->appPrefix . 'callback';
+        $channel->exchange_declare($exchangeName, 'topic', false, false, false);
+        $queueName = $this->appPrefix . 'callback_queue_' . $routingKey;
+        $arguments = $this->createAMQPTable([
+            'x-max-priority'         => self::PRIORITY_MAX,
+            'x-message-ttl'          => self::MESSAGE_TTL * 1000
+        ]);
+        $channel->queue_declare($queueName, false, true, false, false, false, $arguments);
+        $channel->queue_bind($queueName, $exchangeName, $routingKey);
+        $channel->basic_consume($queueName, '', false, $noAck, false, false, $callback);
+        return $queueName;
+    }
+
+    /**
+     * Создаёт очередь для отложенного выполнения задач
+     * @param string $exchange
+     * @param string $routingKey
+     * @param int $delay
+     * @return string Название созданной очереди
+     */
+    public function createDelayedQueue($exchange, $routingKey, $delay) {
+        $channel = $this->createChannel();
+        $channel->exchange_declare($exchange, 'topic', false, false, false);
+        $queueName = $this->appPrefix . "delayed_queue_$routingKey:$delay";
+        $arguments = $this->createAMQPTable([
+            'x-dead-letter-exchange'    => $exchange,
+            'x-dead-letter-routing-key' => $routingKey,
+            'x-max-priority'            => self::PRIORITY_MAX,
+            'x-message-ttl'             => $delay * 1000,
+        ]);
+        $channel->queue_declare($queueName, false, true, false, false, false, $arguments);
+        $channel->close();
+        return $queueName;
     }
 
     /**
@@ -368,10 +399,11 @@ class Producer
         $channel   = $this->createChannel();
         $delay     = $startTime - time();
         $arguments = $this->createAMQPTable([
-            "x-dead-letter-exchange"    => $exchange,
-            "x-dead-letter-routing-key" => $routingKey,
-            "x-message-ttl"             => $delay * 1000,
-            "x-expires"                 => ($delay + 60) * 1000
+            'x-dead-letter-exchange'    => $exchange,
+            'x-dead-letter-routing-key' => $routingKey,
+            'x-max-priority'            => self::PRIORITY_MAX,
+            'x-message-ttl'             => $delay * 1000,
+            'x-expires'                 => ($delay + 60) * 1000
         ]);
         list($queue) = $channel->queue_declare('', false, true, false, true, false, $arguments);
         $msg = $this->createAMQPMessage($body, ['delivery_mode' => 2, 'priority' => $priority]);

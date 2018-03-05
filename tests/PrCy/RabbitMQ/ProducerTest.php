@@ -110,32 +110,6 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
         $this->assertEquals($channelMock, $channel);
     }
 
-    public function testCreateCallbackQueue()
-    {
-        $queueName = 'queueNameMock';
-
-        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
-            ->disableOriginalConstructor()
-            ->setMethods(['queue_declare'])
-            ->getMock();
-        $channelMock->expects($this->once())
-            ->method('queue_declare')
-            ->willReturn([$queueName]);
-
-        $argumentsMock = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
-
-        $producer = $this->createProducerMock(['createChannel', 'createAMQPTable']);
-        $producer->expects($this->once())
-            ->method('createChannel')
-            ->willReturn($channelMock);
-        $producer->expects($this->once())
-            ->method('createAMQPTable')
-            ->willReturn($argumentsMock);
-
-        list($resultQueueName) = $producer->createCallbackQueue($queueName);
-        $this->assertEquals($queueName, $resultQueueName);
-    }
-
     public function testAddMessage()
     {
         $routingKey = 'routingKeyMock';
@@ -431,6 +405,102 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
 
         $producer = $this->createProducerMock(['createConnection']);
         $producer->waitRpcCallbacks($channelMock);
+    }
+
+    public function testCreateCallbackQueue()
+    {
+        $routingKey          = 'routingKeyMock';
+        $correlationId       = 1234;
+        $deliveryTag         = 12345;
+        $argumentsMock       = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
+        $expectedResult      = 'resultMock';
+        $actualResult        = null;
+        $actualCorrelationId = null;
+        $innerCallback       = null;
+        
+        $outerCallback = function($result, $correlationId) use (&$actualResult, &$actualCorrelationId) {
+            $actualResult = $result;
+            $actualCorrelationId = $correlationId;
+        };
+
+        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
+            ->disableOriginalConstructor()
+            ->setMethods(['exchange_declare', 'queue_declare', 'queue_bind', 'basic_consume', 'basic_ack'])
+            ->getMock();
+        $channelMock->expects($this->once())
+            ->method('exchange_declare');
+        $channelMock->expects($this->once())
+            ->method('queue_declare');
+        $channelMock->expects($this->once())
+            ->method('queue_bind');
+        $channelMock->expects($this->once())
+            ->method('basic_consume')
+            ->with(
+                $this->equalTo('callback_queue_routingKeyMock'),
+                $this->equalTo(''),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->callback(function ($callback) use (&$innerCallback) {
+                    $innerCallback = $callback;
+                    return true;
+                })
+            );
+        $channelMock->expects($this->once())
+            ->method('basic_ack');
+
+        $producer = $this->createProducerMock(['createAMQPTable']);
+        $producer->expects($this->once())
+            ->method('createAMQPTable')
+            ->willReturn($argumentsMock);
+        $producer->createCallbackQueue($channelMock, $routingKey, $outerCallback);
+
+        $messageMock = $this->getMockBuilder('\PhpAmqpLib\Message\AMQPMessage')
+            ->disableOriginalConstructor()
+            ->setMethods(['get'])
+            ->getMock();
+        $messageMock->body = json_encode($expectedResult);
+        $messageMock->delivery_info = [
+            'channel'      => $channelMock,
+            'delivery_tag' => $deliveryTag
+        ];
+        $messageMock->expects($this->once())
+            ->method('get')
+            ->with($this->equalTo('correlation_id'))
+            ->willReturn($correlationId);
+
+        $innerCallback($messageMock, $correlationId);
+        $this->assertEquals($expectedResult, $actualResult);
+        $this->assertEquals($correlationId, $actualCorrelationId);
+    }
+
+    public function testCreateDelayedQueue()
+    {
+        $exchange      = 'exchangeMock';
+        $routingKey    = 'routingKeyMock';
+        $delay         = 123;
+        $argumentsMock = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
+
+        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
+            ->disableOriginalConstructor()
+            ->setMethods(['exchange_declare', 'queue_declare', 'close'])
+            ->getMock();
+        $channelMock->expects($this->once())
+            ->method('exchange_declare');
+        $channelMock->expects($this->once())
+            ->method('queue_declare');
+        $channelMock->expects($this->once())
+            ->method('close');
+
+        $producer = $this->createProducerMock(['createChannel', 'createAMQPTable', 'createAMQPMessage']);
+        $producer->expects($this->once())
+            ->method('createChannel')
+            ->willReturn($channelMock);
+        $producer->expects($this->once())
+            ->method('createAMQPTable')
+            ->willReturn($argumentsMock);
+        $producer->createDelayedQueue($exchange, $routingKey, $delay);
     }
 
     public function testAddDelayedMessage()
