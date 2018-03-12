@@ -291,6 +291,7 @@ class Producer
         $msg = $this->createAMQPMessage(
             $body,
             [
+                'delivery_mode'  => 2,
                 'correlation_id' => $correlationId,
                 'reply_to'       => $replyTo,
                 'priority'       => $priority,
