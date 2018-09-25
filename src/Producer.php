@@ -391,24 +391,50 @@ class Producer
      * @param string $exchange
      * @param string $routingKey
      * @param string $body
-     * @param int    $startTime
+     * @param float  $startTime
      * @param int    $priority
      * @return void
      */
     public function addDelayedMessage($exchange, $routingKey, $body, $startTime, $priority = self::PRIORITY_NORMAL)
     {
         $channel   = $this->createChannel();
-        $delay     = $startTime - time();
+        $delay     = intval(1000 * ($startTime - microtime(true)));
+        $delay     = max(0, $delay);
         $arguments = $this->createAMQPTable([
             'x-dead-letter-exchange'    => $exchange,
             'x-dead-letter-routing-key' => $routingKey,
             'x-max-priority'            => self::PRIORITY_MAX,
-            'x-message-ttl'             => $delay * 1000,
-            'x-expires'                 => ($delay + 60) * 1000
+            'x-message-ttl'             => $delay,
+            'x-expires'                 => $delay + 60000
         ]);
         list($queue) = $channel->queue_declare('', false, true, false, true, false, $arguments);
         $msg = $this->createAMQPMessage($body, ['delivery_mode' => 2, 'priority' => $priority]);
         $channel->basic_publish($msg, '', $queue);
         $channel->close();
+    }
+
+    /**
+     * Добавление отложенного колбэка
+     * @param AMQPChannel $channel
+     * @param string      $body
+     * @param callback    $outerCallback
+     * @param float       $startTime
+     * @param int         $priority
+     * @return void
+     */
+    public function appendDelayedCallback($channel, $body, $outerCallback, $startTime, $priority = self::PRIORITY_NORMAL)
+    {
+        $callback = function ($msg) use ($outerCallback) {
+            // Выполняем внешний callback
+            $outerCallback(json_decode($msg->body, true));
+            // Подтверждаем обработку результата
+            $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag']);
+            // Перестаём слушать канал, так как ответ получен
+            $msg->delivery_info['channel']->basic_cancel($msg->delivery_info['consumer_tag']);
+        };
+        $arguments = $this->createAMQPTable(['x-max-priority' => self::PRIORITY_HIGH]);
+        list($callbackQueueName) = $channel->queue_declare('', false, true, true, true, false, $arguments);
+        $channel->basic_consume($callbackQueueName, '', false, false, false, false, $callback);
+        $this->addDelayedMessage('', $callbackQueueName, $body, $startTime, $priority);
     }
 }

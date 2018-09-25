@@ -536,4 +536,66 @@ class ProducerTest extends \PHPUnit_Framework_TestCase
             ->willReturn($messageMock);
         $producer->addDelayedMessage($exchange, $routingKey, $body, $startTime);
     }
+
+    public function testAppendDelayedCallback()
+    {
+        $expectedResult = 123;
+        $actualResult   = null;
+        $startTime      = strtotime('+30 minutes');
+        $deliveryTag    = 'deliveryTagMock';
+        $consumerTag    = 'consumerTagMock';
+        $body           = 'bodyMock';
+        $innerCallback  = null;
+        $outerCallback  = function($data) use (&$actualResult) {
+            $actualResult = $data;
+        };
+        $callbackQueueName = 'amq.gen-mock';
+
+        $channelMock = $this->getMockBuilder('\PhpAmqpLib\Channel')
+            ->disableOriginalConstructor()
+            ->setMethods(['queue_declare', 'basic_consume', 'basic_ack', 'basic_cancel'])
+            ->getMock();
+        $channelMock->expects($this->once())
+            ->method('queue_declare')
+            ->willReturn([$callbackQueueName]);
+        $channelMock->expects($this->once())
+            ->method('basic_consume')
+            ->with(
+                $this->equalTo($callbackQueueName),
+                $this->equalTo(''),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->equalTo(false),
+                $this->callback(function ($callback) use (&$innerCallback) {
+                    $innerCallback = $callback;
+                    return true;
+                })
+        );
+        $channelMock->expects($this->once())
+            ->method('basic_ack');
+        $channelMock->expects($this->once())
+            ->method('basic_cancel');
+
+        $messageMock = $this->getMockBuilder('\PhpAmqpLib\Message\AMQPMessage')
+            ->disableOriginalConstructor()
+            ->setMethods(['get'])
+            ->getMock();
+        $messageMock->body          = json_encode($expectedResult);
+        $messageMock->delivery_info = [
+            'channel'      => $channelMock,
+            'delivery_tag' => $deliveryTag,
+            'consumer_tag' => $consumerTag,
+        ];
+        $argumentsMock = $this->getMock('\PhpAmqpLib\Wire\AMQPTable');
+        $producer      = $this->createProducerMock(['createAMQPTable', 'addDelayedMessage']);
+        $producer->expects($this->once())
+            ->method('createAMQPTable')
+            ->willReturn($argumentsMock);
+        $producer->expects($this->once())
+            ->method('addDelayedMessage');
+        $producer->appendDelayedCallback($channelMock, $body, $outerCallback, $startTime);
+        $innerCallback($messageMock);
+        $this->assertEquals($expectedResult, $actualResult);
+    }
 }
