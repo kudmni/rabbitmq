@@ -3,4 +3,4 @@
 
 ## Установка
 
-`composer require kudmni/yandex-metrika`
+`composer require kudmni/rabbitmq`
